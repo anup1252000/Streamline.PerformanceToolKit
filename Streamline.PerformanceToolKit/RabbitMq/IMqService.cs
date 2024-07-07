@@ -2,8 +2,8 @@
 {
     public interface IMqService
     {
-        Task<bool> PublishMessageAsync(string message, RabbitMqOptions options);
-        Task<bool> PublishStreamMessage(string message, RabbitMqOptions options);
-        Task<bool> BulkPublishAsync(IEnumerable<string> messages, RabbitMqOptions options);
+        Task<bool> PublishMessageAsync(string message);
+        Task<bool> PublishStreamMessageAsync(string message);
+        Task<bool> BulkPublishAsync(IEnumerable<string> messages);
     }
 }

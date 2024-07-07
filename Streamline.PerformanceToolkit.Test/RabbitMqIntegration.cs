@@ -1,18 +1,20 @@
 using Microsoft.Extensions.Options;
-using Microsoft.VisualStudio.TestPlatform.CommunicationUtilities;
 using RabbitMQ.Client;
 using Streamline.PerformanceToolKit.RabbitMq;
 using System.Text;
-using System.Threading.Channels;
 
 namespace Streamline.PerformanceToolkit.Test
 {
     public class RabbitMqIntegration
     {
-        [Fact]
-        public async Task PublishMessage_ReturnBool()
+        private readonly RabbitMqOptions _rabbitMqOption;
+        private readonly IOptions<RabbitMqOptions> _options;
+        private readonly AsyncChannelPoolWithDataflow _channelPool;
+        private readonly IMqService _rabbitMqLibrary;
+
+        public RabbitMqIntegration()
         {
-            var rabbitMqOption = new RabbitMqOptions
+            _rabbitMqOption = new RabbitMqOptions
             {
                 Host = "localhost",
                 UserName = "guest",
@@ -22,20 +24,27 @@ namespace Streamline.PerformanceToolkit.Test
                 RoutingKey = "hello",
                 Durable = true,
                 ExchangeType = ExchangeType.Direct,
-                Queue = "hello"
+                Queue = "hello",
+                ChannelPoolSize = 10
             };
-            var options=Options.Create(rabbitMqOption);
+            _options = Options.Create(_rabbitMqOption);
+            _channelPool = new AsyncChannelPoolWithDataflow(_options);
+            _rabbitMqLibrary = new MqService(_channelPool, _options, null); // Pass null for ILogger in tests
+        }
+
+        [Fact]
+        public async Task PublishMessage_ReturnBool()
+        {
             var message = "hello RabbitMQ anup";
-            IMqService rabbitMqLibrary = new MqService(new AsyncChannelPoolWithDataflow(options,5),options);
-            var result = await rabbitMqLibrary.PublishMessageAsync(message, rabbitMqOption);
+            var result = await _rabbitMqLibrary.PublishMessageAsync(message);
             Assert.True(result);
         }
 
         [Fact]
-        public async Task PublishMessageStream_ReturnInt()
+        public async Task PublishStreamMessage_ReturnBool()
         {
             var message = "hello RabbitMQ anup";
-            var options = new RabbitMqOptions
+            var streamOptions = new RabbitMqOptions
             {
                 Host = "localhost",
                 UserName = "guest",
@@ -45,211 +54,103 @@ namespace Streamline.PerformanceToolkit.Test
                 RoutingKey = "HelloWorld",
                 Durable = true,
                 ExchangeType = ExchangeType.Direct,
-                Queue = "HelloWorld"
+                Queue = "HelloWorld",
+                ChannelPoolSize = 5
             };
-            var someoptions = Options.Create(options);
-            IMqService rabbitMqLibrary = new MqService(new AsyncChannelPoolWithDataflow(someoptions, 5), someoptions);
-            var result = await rabbitMqLibrary.PublishStreamMessage(message, options);
+
+            var streamOptionsWrapper = Options.Create(streamOptions);
+            var streamChannelPool = new AsyncChannelPoolWithDataflow(streamOptionsWrapper);
+            var streamMqService = new MqService(streamChannelPool, streamOptionsWrapper, null); // Pass null for ILogger in tests
+
+            var result = await streamMqService.PublishStreamMessageAsync(message);
             Assert.True(result);
         }
 
         [Fact]
         public async Task BulkPublish_ReturnTrue()
         {
-            List<string> messages = new List<string>();
-            for (int i = 0; i < 100000; i++)
-            {
-                messages.Add("Ganesh" + i);
-            }
-            var options = new RabbitMqOptions
-            {
-                Host = "localhost",
-                UserName = "guest",
-                Password = "guest",
-                Port = 5672,
-                Exchange = "hello_direct_exchange",
-                RoutingKey = "hello",
-                Durable = true,
-                ExchangeType = ExchangeType.Direct,
-                Queue = "hello"
-            };
-
-            var someoptions = Options.Create(options);
-            IMqService rabbitMqLibrary = new MqService(new AsyncChannelPoolWithDataflow(someoptions, 5), someoptions);
-            var result =await rabbitMqLibrary.BulkPublishAsync(messages, options);
+            var messages = Enumerable.Range(0, 1000).Select(i => $"Ganesh{i}").ToList();
+            var result = await _rabbitMqLibrary.BulkPublishAsync(messages);
             Assert.True(result);
         }
 
         [Fact]
         public async Task BulkPublishAsyncChannelPool_ReturnTrue()
         {
+            var messages = Enumerable.Range(0, 1000).Select(i => $"Parvati{i}").ToList();
 
-            List<string> messages = new List<string>();
-            for (int i = 0; i < 100000; i++)
-            {
-                messages.Add("Parvati" + i);
-            }
-
-            var options = new RabbitMqOptions
-            {
-                Host = "localhost",
-                UserName = "guest",
-                Password = "guest",
-                Port = 5672,
-                Exchange = "hello_direct_exchange",
-                RoutingKey = "hello",
-                Durable = true,
-                ExchangeType = ExchangeType.Direct,
-                Queue = "hello"
-            };
-
-            var asyncChannel = new AsyncChannelPoolWithDataflow(Options.Create(options), 5);
-            IModel channel = await asyncChannel.GetChannelAsync();
-
+            IModel channel = await _channelPool.GetChannelAsync();
             try
             {
                 channel.ConfirmSelect();
                 var bulkPublish = channel.CreateBasicPublishBatch();
 
-                channel.QueueDeclare(options.Queue, durable: true, exclusive: false, autoDelete: false);
+                channel.QueueDeclare(_rabbitMqOption.Queue, durable: true, exclusive: false, autoDelete: false);
                 var properties = channel.CreateBasicProperties();
                 properties.Persistent = true;
 
                 foreach (var message in messages)
                 {
                     var body = Encoding.UTF8.GetBytes(message).AsMemory();
-                    bulkPublish.Add(options.Exchange, options.RoutingKey, false, properties, body);
+                    bulkPublish.Add(_rabbitMqOption.Exchange, _rabbitMqOption.RoutingKey, false, properties, body);
                 }
 
                 bulkPublish.Publish();
 
-                // Manually wait for confirms
-                foreach (var message in messages)
-                {
-                    if (!channel.WaitForConfirms(TimeSpan.FromSeconds(10)))
-                    {
-                        // Handle failed confirmation
-                        Console.WriteLine("Failed to confirm message: " + message);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                // Handle exceptions
-                Console.WriteLine($"Error publishing messages: {ex.Message}");
+                Assert.True(channel.WaitForConfirms(TimeSpan.FromSeconds(10)), "Failed to confirm messages");
             }
             finally
             {
-                // Return the channel to the pool
-                await asyncChannel.ReturnChannelAsync(channel);
+                await _channelPool.ReturnChannelAsync(channel);
             }
-
-
-            #region Commented
-            //List<string> messages = new List<string>();
-            //for (int i = 0; i < 100000; i++)
-            //{
-            //    messages.Add("Parvati" + i);
-            //}
-            //var options = new RabbitMqOptions
-            //{
-            //    Host = "localhost",
-            //    UserName = "guest",
-            //    Password = "guest",
-            //    Port = 5672,
-            //    Exchange = "hello_direct_exchange",
-            //    RoutingKey = "hello",
-            //    Durable = true,
-            //    ExchangeType = ExchangeType.Direct,
-            //    Queue = "hello"
-            //};
-            //var asyncChannel=new AsyncChannelPoolWithDataflow(Options.Create(options),5);
-            //IModel channel = await asyncChannel.GetChannelAsync();
-            //try
-            //{
-
-            //    channel.ConfirmSelect();
-            //    var bulkPublish = channel.CreateBasicPublishBatch();
-
-            //    channel.QueueDeclare(options.Queue, durable: true, exclusive: false, autoDelete: false);
-            //    var properties = channel.CreateBasicProperties();
-            //    properties.Persistent = true;
-            //    foreach (var message in messages)
-            //    {
-            //        var body = Encoding.UTF8.GetBytes(message).AsMemory();
-            //        bulkPublish.Add(options.Exchange, options.RoutingKey, false, properties, body);
-            //    }
-            //    bulkPublish.Publish();
-
-            //    //// Declare Exchange and Queue
-            //    //channel.ExchangeDeclare(options.Exchange, options.ExchangeType, durable: options.Durable);
-            //    //channel.QueueDeclare(options.Queue, durable: options.Durable, exclusive: false, autoDelete: false);
-            //    //channel.QueueBind(options.Queue, options.Exchange, options.RoutingKey);
-
-            //    //// Publish messages
-            //    //foreach (var message in messages)
-            //    //{
-            //    //    var body = Encoding.UTF8.GetBytes(message);
-            //    //    var properties = channel.CreateBasicProperties();
-            //    //    properties.Persistent = true;
-
-            //    //    channel.BasicPublish(options.Exchange, options.RoutingKey, properties, body);
-            //    //}
-            //}
-            //finally
-            //{
-            //    await asyncChannel.ReturnChannelAsync(channel);
-            //}
-            #endregion
         }
-    }
-
-    #region Commented
-    //public interface IRabbitMqService
-    //{
-    //    void PublishMessage(string message, RabbitMqOptions options);
-    //}
-    //public record RabbitMqOptions
-    //{
-    //    public string UserName { get; set; }
-    //    public string Password { get; set; }
-    //    public int Port { get; set; }
-    //    public string Host { get; set; }
-    //    public string Exchange { get; set; }
-    //    public string RoutingKey { get; set; }
-    //    public string Queue { get; set; }
-    //    public bool Durable { get; set; }
-    //    public string ExchangeType { get; set; }
-    //}
-
-    //public class RabbitMqService : IRabbitMqService
-    //{
-    //    public void PublishMessage(string message, RabbitMqOptions options)
-    //    {
-    //        var factory = new ConnectionFactory
-    //        {
-    //            HostName = options.Host,
-    //            UserName = options.UserName,
-    //            Password = options.Password,
-    //            Port = options.Port
-    //        };
-
-    //        using (var connection = factory.CreateConnection())
-    //        using (var channel = connection.CreateModel())
-    //        {
-    //            DeclareExchangeAndQueue(channel, options);
-
-    //            var body = Encoding.UTF8.GetBytes(message);
-    //            channel.BasicPublish(exchange: options.Exchange, routingKey: options.RoutingKey, basicProperties: null, body: body);
-    //        }
-    //    }
-
-    //    private void DeclareExchangeAndQueue(IModel channel, RabbitMqOptions options)
-    //    {
-    //        channel.ExchangeDeclare(options.Exchange, options.ExchangeType, durable: options.Durable);
-    //        channel.QueueDeclare(options.Queue, durable: options.Durable, exclusive: false, autoDelete: false, arguments: null);
-    //        channel.QueueBind(options.Queue, options.Exchange, options.RoutingKey);
-    //    }
-    //}
-    #endregion
+    } 
 }
+        #region Commented
+        //public interface IRabbitMqService
+        //{
+        //    void PublishMessage(string message, RabbitMqOptions options);
+        //}
+        //public record RabbitMqOptions
+        //{
+        //    public string UserName { get; set; }
+        //    public string Password { get; set; }
+        //    public int Port { get; set; }
+        //    public string Host { get; set; }
+        //    public string Exchange { get; set; }
+        //    public string RoutingKey { get; set; }
+        //    public string Queue { get; set; }
+        //    public bool Durable { get; set; }
+        //    public string ExchangeType { get; set; }
+        //}
+
+        //public class RabbitMqService : IRabbitMqService
+        //{
+        //    public void PublishMessage(string message, RabbitMqOptions options)
+        //    {
+        //        var factory = new ConnectionFactory
+        //        {
+        //            HostName = options.Host,
+        //            UserName = options.UserName,
+        //            Password = options.Password,
+        //            Port = options.Port
+        //        };
+
+        //        using (var connection = factory.CreateConnection())
+        //        using (var channel = connection.CreateModel())
+        //        {
+        //            DeclareExchangeAndQueue(channel, options);
+
+        //            var body = Encoding.UTF8.GetBytes(message);
+        //            channel.BasicPublish(exchange: options.Exchange, routingKey: options.RoutingKey, basicProperties: null, body: body);
+        //        }
+        //    }
+
+        //    private void DeclareExchangeAndQueue(IModel channel, RabbitMqOptions options)
+        //    {
+        //        channel.ExchangeDeclare(options.Exchange, options.ExchangeType, durable: options.Durable);
+        //        channel.QueueDeclare(options.Queue, durable: options.Durable, exclusive: false, autoDelete: false, arguments: null);
+        //        channel.QueueBind(options.Queue, options.Exchange, options.RoutingKey);
+        //    }
+        //}
+        #endregion

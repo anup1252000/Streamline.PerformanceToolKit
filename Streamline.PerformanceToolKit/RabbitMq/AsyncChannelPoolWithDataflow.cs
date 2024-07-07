@@ -4,21 +4,20 @@ using System.Threading.Tasks.Dataflow;
 
 namespace Streamline.PerformanceToolKit.RabbitMq
 {
-    public class AsyncChannelPoolWithDataflow : IAsyncDisposable
+    public class AsyncChannelPoolWithDataflow : IRabbitMQChannelPool
     {
         private readonly IOptions<RabbitMqOptions> _options;
         private IConnection _connection;
-        private readonly int _initialPoolSize;
         private readonly SemaphoreSlim _connectionLock = new(1, 1);
         private bool _disposed;
 
         private readonly TransformBlock<int, IModel> _channelCreationBlock;
         private readonly BufferBlock<IModel> _channelBufferBlock;
 
-        public AsyncChannelPoolWithDataflow(IOptions<RabbitMqOptions> options, int poolSize)
+        public AsyncChannelPoolWithDataflow(IOptions<RabbitMqOptions> options)
         {
             _options = options;
-            _initialPoolSize = poolSize;
+            var poolSize = options.Value.ChannelPoolSize;
 
             _channelBufferBlock = new BufferBlock<IModel>(new DataflowBlockOptions
             {
@@ -47,7 +46,6 @@ namespace Streamline.PerformanceToolKit.RabbitMq
                 _channelBufferBlock.Post(await CreateChannelAsync());
             }
         }
-
         private async Task<IConnection> GetOrCreateConnectionAsync()
         {
             if (_connection == null || !_connection.IsOpen)
@@ -127,7 +125,7 @@ namespace Streamline.PerformanceToolKit.RabbitMq
             else
             {
                 channel.Dispose();
-                if (_channelBufferBlock.Count < _initialPoolSize)
+                if (_channelBufferBlock.Count < _options.Value.ChannelPoolSize)
                 {
                     await _channelBufferBlock.SendAsync(await CreateChannelAsync());
                 }
@@ -177,8 +175,4 @@ namespace Streamline.PerformanceToolKit.RabbitMq
             await _channelBufferBlock.Completion;
         }
     }
-
-
-
-
 }
