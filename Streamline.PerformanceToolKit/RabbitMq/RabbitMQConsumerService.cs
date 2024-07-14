@@ -14,6 +14,7 @@ namespace Streamline.PerformanceToolKit.RabbitMq
         private readonly IRetryPolicy _retryPolicy;
         private readonly ILogger<RabbitMQConsumerService> _logger;
         private readonly RabbitMqOptions _options;
+        private readonly CancellationTokenSource _cancellationTokenSource;
 
         public RabbitMQConsumerService(
             IRabbitMQChannelPool channelPool,
@@ -27,44 +28,78 @@ namespace Streamline.PerformanceToolKit.RabbitMq
             _retryPolicy = retryPolicy;
             _logger = logger;
             _options = options.Value;
+            _cancellationTokenSource = new CancellationTokenSource();
         }
 
-        public async Task StartAsync(CancellationToken cancellationToken)
+        public async Task StartAsync()
         {
-            var channel = await _channelPool.GetChannelAsync();
-            var consumer = new AsyncEventingBasicConsumer(channel);
-            var buffer = new List<BasicDeliverEventArgs>();
+            var cancellationToken = _cancellationTokenSource.Token;
 
-            consumer.Received += async (model, ea) =>
+            try
             {
-                buffer.Add(ea);
-
-                if (buffer.Count >= _options.BatchSize)
+                var channel = await _channelPool.GetChannelAsync();
+                try
                 {
-                    await HandleMessagesAsync(buffer.ToArray(), cancellationToken);
-                    buffer.Clear();
-                }
-            };
+                    channel.BasicQos(prefetchSize: 0, prefetchCount: 1000, global: false);
 
-            channel.BasicConsume(queue: _options.Queue, autoAck: false, consumer: consumer);
+                    var consumer = new EventingBasicConsumer(channel);
+                    consumer.Received += async (sender, eventArgs) =>
+                    {
+                        var message = Encoding.UTF8.GetString(eventArgs.Body.ToArray());
+                       // _logger.LogInformation("Received message: {Message}", message);
+
+                        // Process the message
+                        await ProcessMessageAsync(eventArgs);
+
+                        // Acknowledge the message
+                        channel.BasicAck(eventArgs.DeliveryTag, multiple: false);
+                    };
+
+                    channel.BasicConsume(
+                        queue: _options.Queue,
+                        autoAck: false,
+                        consumer: consumer);
+
+                   // _logger.LogInformation("Consumer started. Listening to queue: {Queue}", _options.Queue);
+
+                    // Wait until cancellation is requested
+                    await Task.Delay(Timeout.Infinite, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    _logger.LogInformation("Consumer stopped due to cancellation request.");
+                }
+                finally
+                {
+                    await _channelPool.ReturnChannelAsync(channel);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to start consuming messages.");
+            }
         }
 
-        private async Task HandleMessagesAsync(BasicDeliverEventArgs[] messages, CancellationToken cancellationToken)
+        public async Task StopAsync()
+        {
+            _cancellationTokenSource.Cancel();
+            await _channelPool.DisposeAsync();
+            _logger.LogInformation("RabbitMQ Consumer Service stopped.");
+        }
+
+        private async Task ProcessMessageAsync(BasicDeliverEventArgs eventArgs)
         {
             try
             {
                 await _retryPolicy.ExecuteAsync(async () =>
                 {
-                    await _consumer.ProcessMessagesAsync(messages, cancellationToken);
+                    await _consumer.ProcessMessagesAsync([eventArgs], CancellationToken.None);
                 });
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to process messages.");
-                foreach (var message in messages)
-                {
-                    await HandleFallbackAsync(message);
-                }
+                _logger.LogError(ex, "Failed to process message, requeuing.");
+                await HandleFallbackAsync(eventArgs);
             }
         }
 
@@ -92,12 +127,5 @@ namespace Streamline.PerformanceToolKit.RabbitMq
                 await _channelPool.ReturnChannelAsync(channel);
             }
         }
-
-        public async Task StopAsync(CancellationToken cancellationToken)
-        {
-            _logger.LogInformation("Stopping RabbitMQ Consumer Service.");
-            await _channelPool.DisposeAsync();
-        }
     }
-
 }

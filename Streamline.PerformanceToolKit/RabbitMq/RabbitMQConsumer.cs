@@ -18,12 +18,19 @@ namespace Streamline.PerformanceToolKit.RabbitMq
         {
             _options = options ?? throw new ArgumentNullException(nameof(options));
             _channelPool = channelPool ?? throw new ArgumentNullException(nameof(channelPool));
-            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            //_logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
-        public Task ProcessMessagesAsync(IEnumerable<BasicDeliverEventArgs> messages, CancellationToken cancellationToken)
+        public async Task ProcessMessagesAsync(IEnumerable<BasicDeliverEventArgs> messages, CancellationToken cancellationToken)
         {
-            throw new NotImplementedException();
+            foreach (var message in messages)
+            {
+                var body = Encoding.UTF8.GetString(message.Body.ToArray());
+                Console.WriteLine(body);
+               // _logger.LogInformation("Processing message: {Message}", body);
+                await Task.Delay(TimeSpan.FromSeconds(1)); // Simulate processing time
+               // _logger.LogInformation("Message processed: {Message}", body);
+            }
         }
 
         public void StartConsuming()

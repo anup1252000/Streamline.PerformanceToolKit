@@ -65,7 +65,7 @@ namespace Streamline.PerformanceToolKit.RabbitMq
 
                 bulkPublish.Publish();
 
-                if (!channel.WaitForConfirms(TimeSpan.FromSeconds(10)))
+                if (!channel.WaitForConfirms(TimeSpan.FromSeconds(1000)))
                 {
                     throw new Exception("Message confirmation failed.");
                 }

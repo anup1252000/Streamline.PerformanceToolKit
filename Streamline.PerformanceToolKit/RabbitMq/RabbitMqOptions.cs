@@ -1,4 +1,6 @@
-﻿namespace Streamline.PerformanceToolKit.RabbitMq
+﻿using System.Security.AccessControl;
+
+namespace Streamline.PerformanceToolKit.RabbitMq
 {
     public class RabbitMqOptions
     {
@@ -14,6 +16,7 @@
         public ushort PrefetchCount { get; set; } = 10;
         public string VirtualHost { get; set; } = "/";
         public int Port { get; set; } = 5672;
+        public int BatchTimeout { get; set; } = 2000;
         public int MaxDegreeOfParallelism { get; set; } = 4;
         public int BoundedCapacity { get; set; } = 100;
         public int RetryCount { get; set; } = 3;

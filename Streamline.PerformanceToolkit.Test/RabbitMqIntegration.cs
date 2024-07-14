@@ -1,5 +1,11 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Polly;
+using Polly.Retry;
 using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
+using Streamline.PerformanceToolKit.Common;
 using Streamline.PerformanceToolKit.RabbitMq;
 using System.Text;
 
@@ -11,6 +17,8 @@ namespace Streamline.PerformanceToolkit.Test
         private readonly IOptions<RabbitMqOptions> _options;
         private readonly AsyncChannelPoolWithDataflow _channelPool;
         private readonly IMqService _rabbitMqLibrary;
+        private readonly RabbitMQConsumer _consumer;
+        private RabbitMQConsumerService _consumerService;
 
         public RabbitMqIntegration()
         {
@@ -25,11 +33,26 @@ namespace Streamline.PerformanceToolkit.Test
                 Durable = true,
                 ExchangeType = ExchangeType.Direct,
                 Queue = "hello",
-                ChannelPoolSize = 10
+                ChannelPoolSize = 5
             };
             _options = Options.Create(_rabbitMqOption);
             _channelPool = new AsyncChannelPoolWithDataflow(_options);
             _rabbitMqLibrary = new MqService(_channelPool, _options, null); // Pass null for ILogger in tests
+            _consumer = new RabbitMQConsumer(_options, _channelPool, null);
+
+            // Create Polly retry policy
+            var retryPolicy = Policy.Handle<Exception>()
+                                    .WaitAndRetryAsync(
+                                        _rabbitMqOption.RetryCount,
+                                        attempt => TimeSpan.FromMilliseconds(_rabbitMqOption.RetryDelayMilliseconds),
+                                        (exception, timeSpan, retryCount, context) =>
+                                        {
+                                            Console.WriteLine($"Retry {retryCount} encountered an error. Waiting {timeSpan.TotalMilliseconds}ms");
+                                        });
+
+            // var logger = new XunitLogger<RabbitMQConsumerService>();
+
+            _consumerService = new RabbitMQConsumerService(_channelPool, _consumer, _options, new PollyRetryPolicy(_options, null), null);
         }
 
         [Fact]
@@ -55,7 +78,11 @@ namespace Streamline.PerformanceToolkit.Test
                 Durable = true,
                 ExchangeType = ExchangeType.Direct,
                 Queue = "HelloWorld",
-                ChannelPoolSize = 5
+                ChannelPoolSize = 5,
+                PrefetchCount = 1000,
+                BatchSize = 10000,
+                BatchTimeout = 20000
+
             };
 
             var streamOptionsWrapper = Options.Create(streamOptions);
@@ -69,7 +96,7 @@ namespace Streamline.PerformanceToolkit.Test
         [Fact]
         public async Task BulkPublish_ReturnTrue()
         {
-            var messages = Enumerable.Range(0, 1000).Select(i => $"Ganesh{i}").ToList();
+            var messages = Enumerable.Range(0, 20000).Select(i => $"Ganesh{i}").ToList();
             var result = await _rabbitMqLibrary.BulkPublishAsync(messages);
             Assert.True(result);
         }
@@ -104,8 +131,94 @@ namespace Streamline.PerformanceToolkit.Test
                 await _channelPool.ReturnChannelAsync(channel);
             }
         }
-    } 
+
+        [Fact]
+        public async Task ConsumeMessages_Success()
+        {
+
+            var channel = await _channelPool.GetChannelAsync();
+            try
+            {
+                 await _consumerService.StartAsync();
+                //channel.BasicQos(prefetchSize: 0, prefetchCount: 1000, global: false);
+
+                //var consumer = new EventingBasicConsumer(channel);
+                //consumer.Received += async (sender, eventArgs) =>
+                //{
+                //    var message = Encoding.UTF8.GetString(eventArgs.Body.ToArray());
+                //    //  _logger.LogInformation("Received message: {Message}", message);
+
+                //    // Process your message here...
+                //    await ProcessMessageAsync(message);
+
+                //    channel.BasicAck(eventArgs.DeliveryTag, multiple: false);
+                //};
+
+                //channel.BasicConsume(
+                //    queue: _rabbitMqOption.Queue,
+                //    autoAck: false,
+                //    consumer: consumer);
+
+                //_logger.LogInformation("Consumer started. Listening to queue: {Queue}", _options.Queue);
+
+                // Wait until cancellation is requested
+                await Task.Delay(Timeout.Infinite);
+                await _consumerService.StopAsync();
+            }
+            catch (OperationCanceledException)
+            {
+                //_logger.LogInformation("Consumer stopped due to cancellation request.");
+            }
+            finally
+            {
+                await _channelPool.ReturnChannelAsync(channel);  
+            }
+           
+        }
+
+
+
+        private async Task ProcessMessageAsync(string message)
+        {
+            // Implement your message processing logic here
+            await Task.Delay(TimeSpan.FromSeconds(1)); // Simulate processing time
+                                                       //       _logger.LogInformation("Processed message: {Message}", message);
+        }
+    }
 }
+
+    //var message = "Test message";
+
+    //// Start consuming messages
+    //var cancellationTokenSource = new CancellationTokenSource();
+    //var consumerTask = _consumerService.StartAsync();
+
+    //// Publish a test message using the AsyncChannelPoolWithDataflow
+    ////using (var channel = await _channelPool.GetChannelAsync())
+    ////{
+    ////    channel.ExchangeDeclare(_options.Exchange, _options.ExchangeType, _options.Durable);
+    ////    channel.QueueDeclare(_options.Queue, _options.Durable, false, false, null);
+    ////    channel.QueueBind(_options.Queue, _options.Exchange, _options.RoutingKey);
+
+    ////    var body = Encoding.UTF8.GetBytes(message);
+    ////    channel.BasicPublish(_options.Exchange, _options.RoutingKey, null, body);
+    ////}
+    //var messages = Enumerable.Range(0, 1000).Select(i => $"Ganesh{i}").ToList();
+    //var result = await _rabbitMqLibrary.BulkPublishAsync(messages);
+
+    //// Wait a bit to allow consumption
+    //await Task.Delay(TimeSpan.FromSeconds(2000));
+
+    //// Stop consuming messages
+    //await _consumerService.StopAsync();
+
+    //// Assert that the message was consumed
+    //// Example: Assert some condition based on the message consumption
+    //// You can add more assertions based on your specific requirements
+    //// For example, verify if the message has been processed or logged appropriately
+    //// Assert.Equal(expected, actual);
+
+       
         #region Commented
         //public interface IRabbitMqService
         //{
