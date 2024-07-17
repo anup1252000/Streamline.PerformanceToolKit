@@ -1,10 +1,6 @@
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Polly;
-using Polly.Retry;
 using RabbitMQ.Client;
-using RabbitMQ.Client.Events;
 using Streamline.PerformanceToolKit.Common;
 using Streamline.PerformanceToolKit.RabbitMq;
 using System.Text;
@@ -162,7 +158,7 @@ namespace Streamline.PerformanceToolkit.Test
                 //_logger.LogInformation("Consumer started. Listening to queue: {Queue}", _options.Queue);
 
                 // Wait until cancellation is requested
-                await Task.Delay(Timeout.Infinite);
+                //await Task.Delay(Timeout.Infinite);
                 await _consumerService.StopAsync();
             }
             catch (OperationCanceledException)

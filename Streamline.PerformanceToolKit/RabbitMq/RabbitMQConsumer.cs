@@ -8,18 +8,11 @@ using System.Text;
 
 namespace Streamline.PerformanceToolKit.RabbitMq
 {
-    public class RabbitMQConsumer : IRabbitMQConsumer
+    public class RabbitMQConsumer(IOptions<RabbitMqOptions> options, AsyncChannelPoolWithDataflow channelPool, ILogger<RabbitMQConsumer> logger) : IRabbitMQConsumer
     {
-        private readonly IOptions<RabbitMqOptions> _options;
-        private readonly AsyncChannelPoolWithDataflow _channelPool;
+        private readonly IOptions<RabbitMqOptions> _options = options ?? throw new ArgumentNullException(nameof(options));
+        private readonly AsyncChannelPoolWithDataflow _channelPool = channelPool ?? throw new ArgumentNullException(nameof(channelPool));
         private readonly ILogger<RabbitMQConsumer> _logger;
-
-        public RabbitMQConsumer(IOptions<RabbitMqOptions> options, AsyncChannelPoolWithDataflow channelPool, ILogger<RabbitMQConsumer> logger)
-        {
-            _options = options ?? throw new ArgumentNullException(nameof(options));
-            _channelPool = channelPool ?? throw new ArgumentNullException(nameof(channelPool));
-            //_logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        }
 
         public async Task ProcessMessagesAsync(IEnumerable<BasicDeliverEventArgs> messages, CancellationToken cancellationToken)
         {

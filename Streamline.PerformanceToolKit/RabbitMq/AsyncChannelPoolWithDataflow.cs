@@ -7,7 +7,7 @@ namespace Streamline.PerformanceToolKit.RabbitMq
     public class AsyncChannelPoolWithDataflow : IRabbitMQChannelPool
     {
         private readonly IOptions<RabbitMqOptions> _options;
-        private IConnection _connection;
+        private IConnection? _connection;
         private readonly SemaphoreSlim _connectionLock = new(1, 1);
         private bool _disposed;
 

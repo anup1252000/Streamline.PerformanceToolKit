@@ -7,29 +7,19 @@ using System.Text;
 
 namespace Streamline.PerformanceToolKit.RabbitMq
 {
-    public class RabbitMQConsumerService
+    public class RabbitMQConsumerService(
+        IRabbitMQChannelPool channelPool,
+        IRabbitMQConsumer consumer,
+        IOptions<RabbitMqOptions> options,
+        IRetryPolicy retryPolicy,
+        ILogger<RabbitMQConsumerService> logger)
     {
-        private readonly IRabbitMQChannelPool _channelPool;
-        private readonly IRabbitMQConsumer _consumer;
-        private readonly IRetryPolicy _retryPolicy;
-        private readonly ILogger<RabbitMQConsumerService> _logger;
-        private readonly RabbitMqOptions _options;
-        private readonly CancellationTokenSource _cancellationTokenSource;
-
-        public RabbitMQConsumerService(
-            IRabbitMQChannelPool channelPool,
-            IRabbitMQConsumer consumer,
-            IOptions<RabbitMqOptions> options,
-            IRetryPolicy retryPolicy,
-            ILogger<RabbitMQConsumerService> logger)
-        {
-            _channelPool = channelPool;
-            _consumer = consumer;
-            _retryPolicy = retryPolicy;
-            _logger = logger;
-            _options = options.Value;
-            _cancellationTokenSource = new CancellationTokenSource();
-        }
+        private readonly IRabbitMQChannelPool _channelPool = channelPool;
+        private readonly IRabbitMQConsumer _consumer = consumer;
+        private readonly IRetryPolicy _retryPolicy = retryPolicy;
+        private readonly ILogger<RabbitMQConsumerService> _logger = logger;
+        private readonly RabbitMqOptions _options = options.Value;
+        private readonly CancellationTokenSource _cancellationTokenSource = new();
 
         public async Task StartAsync()
         {
